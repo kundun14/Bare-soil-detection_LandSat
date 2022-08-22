@@ -1,5 +1,5 @@
 # Bare-soil-detection_LandSat
-Synthetic soil composite derived from LandSat time series in Google Earth Engine.
+Data mining algorithm to generate a Synthetic soil composite derived from LandSat time series in Google Earth Engine.
 
 A implentation of GEOS3 code, inspired by :
 
