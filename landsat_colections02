@@ -1,0 +1,17 @@
+
+// Collection 2 Level-2 products are available for Landsat 4-5 TM, 
+// Landsat 7 ETM+, and Landsat 8-9 OLI/TIRS data acquired from 1982 to present
+
+// C02 es coleccion 2
+// T1 son las imagenes de mayor calidad
+// L2 es por que estan atmofericamente corregidas con 
+// Landsat 4, 5, and 7 SR data are generated using the LEDAPS
+// Landsat 8 SR data are generated using the LaSRC algorithm
+
+
+var DN_L4 = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2');
+var DN_L5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2');
+var DN_L7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2');
+var DN_L8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2');
+
+

@@ -1,0 +1,88 @@
+
+// QUALITY INDICATORS
+
+// Bits 0-1: Mandatory QA flags
+// 0: LST produced, good quality, not necessary to examine more detailed QA
+// 1: LST produced, other quality, recommend examination of more detailed QA
+// 2: LST not produced due to cloud effects
+// 3: LST not produced primarily due to reasons other than cloud
+// Bits 2-3: Data quality flag
+// 0: Good data quality
+// 1: Other quality data
+// 2: TBD
+// 3: TBD
+// Bits 4-5: Emissivity error flag
+// 0: Average emissivity error ≤ 0.01
+// 1: Average emissivity error ≤ 0.02
+// 2: Average emissivity error ≤ 0.04
+// 3: Average emissivity error > 0.04
+// Bits 6-7: LST error flag
+// 0: Average LST error ≤ 1K
+// 1: Average LST error ≤ 2K
+// 2: Average LST error ≤ 3K
+// 3: Average LST error > 3K
+
+// MASCARA
+
+// QA Flag (Bits 0-1) is 0 or 1 (LST produced of both good and other quality)
+// Data Quality Flag (Bits 2-3) is 0 (Good data quality)
+// LST Error Flag (Bits 6-7) is 0 (Average LST error ≤ 1K)
+
+// CODIGO
+
+// FUNCION DE BITMASKING 
+
+// Helper function to extract the values from specific bits
+// The input parameter can be a ee.Number() or ee.Image()
+// Code adapted from https://gis.stackexchange.com/a/349401/5160
+
+var bitwiseExtract = function(input, fromBit, toBit) {
+  var maskSize = ee.Number(1).add(toBit).subtract(fromBit);
+  var mask = ee.Number(1).leftShift(maskSize).subtract(1);
+  return input.rightShift(fromBit).bitwiseAnd(mask)
+}
+
+// CODIGO 
+
+var modisLST = ee.ImageCollection("MODIS/006/MOD11A1");
+var lsib = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var australia = lsib.filter(ee.Filter.eq('country_na', 'Australia'));
+var geometry = australia.geometry();
+var terra = modisLST
+  .filter(ee.Filter.date('2001-01-01', '2010-01-01'))
+  .select('LST_Day_1km','QC_Day');
+   
+// Get a single image for testing
+var image = ee.Image(terra.first());
+var lstDay = image.select('LST_Day_1km');
+var qcDay = image.select('QC_Day');
+// Let's extract all pixels from the input image where
+// Bits 0-1 <= 1 (LST produced of both good and other quality)
+// Bits 2-3 = 0 (Good data quality)
+// Bits 4-5 Ignore, any value is ok
+// Bits 6-7 = 0 (Average LST error ≤ 1K)
+var qaMask = bitwiseExtract(qcDay, 0, 1).lte(1);
+var dataQualityMask = bitwiseExtract(qcDay, 2, 3).eq(0);
+var lstErrorMask = bitwiseExtract(qcDay, 6, 7).eq(0);
+var mask = qaMask.and(dataQualityMask).and(lstErrorMask);
+var lstDayMasked = lstDay.updateMask(mask);
+var visParams = {min:13000, max:16000, palette: ['green', 'yellow', 'red']};
+Map.addLayer(lstDay.clip(geometry), visParams, 'Original LST Image');
+Map.addLayer(lstDayMasked.clip(geometry), visParams, 'LST Masked');
+
+// APLICAR A COLECCIONES COMPLETAS
+
+// We can wrap this in a function and apply it on the 
+// entire collection to mask all images
+
+var applyQaMask = function(image) {
+  var lstDay = image.select('LST_Day_1km')
+  var qcDay = image.select('QC_Day')
+  var qaMask = bitwiseExtract(qcDay, 0, 1).lte(1)
+  var dataQualityMask = bitwiseExtract(qcDay, 2, 3).eq(0)
+  var lstErrorMask = bitwiseExtract(qcDay, 6, 7).eq(0)
+  var mask = qaMask.and(dataQualityMask).and(lstErrorMask)
+  return lstDay.updateMask(mask)
+}
+var terraMasked = terra.map(applyQaMask)
+

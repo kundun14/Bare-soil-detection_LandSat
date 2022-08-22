@@ -1,0 +1,244 @@
+/*
+Day 1, Exercise 1: Load a Cloud-Free Landsat Composite for AOI
+Soil Mapping/Classification in Earth Engine 
+
+Landsat Composite with cloud masking
+///////////////////////////////////////////////////
+Written by: Ian Housman
+Modified by: Brenna Schwert and Lila Leatherman
+Modified for NCRS GEE Soil Mapping/Classification by Juliette Bateman
+Original Script: 7/5/15
+Last Modified: 3/26/2021
+RedCastle Resources Inc., GTAC USFS
+///////////////////////////////////////////////////
+Description:
+This script creates a cloud-free composites of Landsat imagery over a user specified interval for a user
+specified geographic area
+///////////////////////////////////////////////////
+*/
+
+/////////////////////////////////////////////////////
+// User Editable Variables
+/////////////////////////////////////////////////////
+
+// Import shapefile from assets folder
+var VT_boundary = ee.FeatureCollection('users/160129/DigitalSoilMapping/VT_boundary');
+
+//Composite area of interest
+var compositeArea = VT_boundary.geometry().bounds();
+//var compositeArea = geometry; // use a polygon drawn on the map rather than an uploaded shapefile
+var roiName = 'Essex_VT'; // Give the study area a descriptive name.
+var buffer_distance = 1; // Distance to buffer composite area in meters. Must be > 0.
+
+//Composite time period
+var year = 2019; // Start year for composite
+var startJulian = 152; // Starting Julian Date
+var endJulian = 252; // Ending Julian date
+var compositingPeriod = 0; // Number of years into the future to include
+
+//Composite parameters
+var cloudThresh = 20; // Specify cloud threshold (0-100)- lower number masks out more clouds
+var possibleSensors = ['L5','L7','L8']; // Specify which sensors to pull from- supports L5,L7, and L8
+var reducerPercentile = 50; // Reducer for compositing
+
+//Export parameters 
+var exportToDrive = 'no'; // gives the option to export image composite to your google drive; Default is 'no'
+var crs = 'EPSG:32618'; // EPSG number for output projection. 32618 = WGS84/UTM Zone 18N. For more info- http://spatialreference.org/ref/epsg/  
+
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// End of user editable parameters. Do not edit anything below this line. Unless you are brave. ;)
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+//////////////////////////////////////////////////////
+//Globals
+//////////////////////////////////////////////////////
+
+// Establish composite area based on input geometry.
+var reducer = ee.Reducer.percentile([reducerPercentile]); // Reducer for compositing
+var prioritizeL5 = false; // Binary true or false for prioritizing L5, L8, then L7 in compositing
+var studyArea = compositeArea.buffer(buffer_distance);
+var fB=studyArea;
+Map.centerObject(studyArea);
+//////////////////////////////////////////////////////
+//Use data mask from Hansen's Global Forest Change as a water mask
+var forestChangeImage = ee.Image('UMD/hansen/global_forest_change_2019_v1_7');
+var mskW = forestChangeImage.select(['datamask']);
+var mskW = mskW.eq(1);
+// Run a focal_mode convolution on the image. 
+var maskFocalMode = mskW.focal_mode();
+// Further smooth the image via focal_max
+var watermask = maskFocalMode.focal_max(5, "square", "pixels", 5 );
+//////////////////////////////////////////////////////
+//Names of collections to look in
+//Add _L1T for L1T imagery
+//TOA is computed on both the L1G or L1T
+var collection_dict = {
+                         L8: "LANDSAT/LC08/C01/T1_TOA",// previously 'LC8',
+                         L7: "LANDSAT/LE07/C01/T1_TOA",//previously 'LE7',
+                         L5: "LANDSAT/LT05/C01/T1_TOA",//'LT5',
+                         L4: "LANDSAT/LT04/C01/T1_TOA",//'LT4'
+  };
+
+//////////////////////////////////////////////////////
+//Band combinations for each sensor corresponding to final selected corresponding bands                        
+var sensor_band_dict =ee.Dictionary({L8 : ee.List([1,2,3,4,5,9,6]),
+                        L7 : ee.List([0,1,2,3,4,5,7]),
+                        L5 : ee.List([0,1,2,3,4,5,6]),
+                        L4 : ee.List([0,1,2,3,4,5,6])
+  });
+
+///////////////////////////////////////////////////////////////////////////////
+// band names
+var bandNames = ee.List(['blue','green','red','nir','swir1','temp','swir2']);
+var STD_NAMES = ['blue','green','red','nir','swir1','temp','swir2'];
+var bandNumbers = [0,1,2,3,4,5,6];
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//Function to mask clouds, ensure data exists in every band, and defringe images
+//Assumes the image is a Landsat image
+function maskCloudsAndSuch(img){
+    //Bust clouds
+    var cs = ee.Algorithms.Landsat.simpleCloudScore(img).select(['cloud']).gt(cloudThresh);
+    //Make sure all or no bands have data
+    var numberBandsHaveData = img.mask().reduce(ee.Reducer.sum());
+    var allOrNoBandsHaveData = numberBandsHaveData.eq(0).or(numberBandsHaveData.gte(7));
+    
+    //If it's Landsat 5- defringe by nibbling away at the fringes
+    var allBandsHaveData = allOrNoBandsHaveData;//.focal_min(1,'square','pixels',8)
+    
+    //Make sure no band is just under zero
+    var allBandsGT = img.reduce(ee.Reducer.min()).gt(-0.001);
+    return img.mask(img.mask().and(cs.not()).and(allBandsHaveData).and(allBandsGT));
+  }
+//////////////////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//Basic shadow masking using sum of specified bands
+//Tends to include hill shadows and water
+  var shadowThresh = 0.1;
+  var shadowSumBands = ['nir','swir1','swir2'];
+  function maskShadows(img){
+    var ss = img.select(shadowSumBands).reduce(ee.Reducer.sum());
+    return img.mask(img.mask().and(ss.gt(shadowThresh)));
+  }
+////////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//Function to handle empty collections that will cause subsequent processes to fail
+//If the collection is empty, will fill it with an empty image
+function fillEmptyCollections(inCollection,dummyImage){                       
+  var dummyCollection = ee.ImageCollection([dummyImage.mask(ee.Image(0))]);
+  var imageCount = inCollection.toList(1).length();
+  return ee.ImageCollection(ee.Algorithms.If(imageCount.gt(0),inCollection,dummyCollection));
+
+}
+//////////////////////////////////////////////////////////////////////////
+function getComp(year,compositingPeriod, startJulian,endJulian, exportToDrive){
+  
+  //Define dates
+  var y1Image = year;
+  var y2Image = year + compositingPeriod;
+  
+  var startDate = ee.Date.fromYMD(ee.Number(year),1,1).advance(startJulian,'day');
+  var endDate = ee.Date.fromYMD(ee.Number(year).add(ee.Number(compositingPeriod)),1,1).advance(endJulian,'day');
+  print('Acquiring composite for',startDate,endDate);
+  
+  //Helper function to get images from a specified sensor
+ function getCollection(sensor,startDate,endDate,startJulian,endJulian){
+  var collectionName = collection_dict[sensor];
+  
+  //Start with an un-date-confined collection of iamges
+  var WOD = ee.ImageCollection(collectionName)
+          .filterBounds(fB)
+          
+  //Pop off an image to serve as a template if there are no images in the date range
+  var dummy = ee.Image(WOD.first());
+  
+  //Filter by the dates
+  var ls = WOD
+          .filterDate(startDate,endDate)
+          .filter(ee.Filter.calendarRange(startJulian,endJulian));
+  
+  //Fill the collection if it's empty
+  ls = fillEmptyCollections(ls,dummy);
+  
+  //Clean the collection up- clouds, fringes....
+  ls = ls.map(maskCloudsAndSuch)
+          .select(sensor_band_dict.get(sensor),bandNames)
+          .map(maskShadows);
+  return ls;
+ }
+  //Get the images for composite and shadow model
+  if(possibleSensors.indexOf('L5') >= 0){
+    var l5s = getCollection('L5',startDate,endDate,startJulian,endJulian);
+  }
+  else{var l5s = getCollection('L5',ee.Date('1000-01-01'),ee.Date('1001-01-01'),0,365)}
+  
+  if(possibleSensors.indexOf('L7') >= 0){
+    var l7s = getCollection('L7',startDate,endDate,startJulian,endJulian);
+  }
+  else{var l7s = getCollection('L7',ee.Date('1000-01-01'),ee.Date('1001-01-01'),0,365)}
+  
+  if(possibleSensors.indexOf('L8') >= 0){
+    var l8s = getCollection('L8',startDate,endDate,startJulian,endJulian);
+  }
+  else{var l8s = getCollection('L8',ee.Date('1000-01-01'),ee.Date('1001-01-01'),0,365)}
+  
+  print('L8',y1Image,l8s);
+  print('L7',y1Image,l7s);
+  
+  var ls = ee.ImageCollection(l5s.merge(l7s).merge(l8s));
+  var composite = ls.reduce(reducer).select(bandNumbers,bandNames).mask(watermask);
+  composite = composite.mask(composite.mask().and(watermask).clip(studyArea));
+  
+  //Get descriptive name
+  var fullName = roiName+'_'+y1Image.toString()+'_' +y2Image.toString()+'_'+startJulian.toString()+'_'+endJulian.toString()+'_Composite';
+  
+  //Set up our final composite with bands we'd like to include
+  var composite = composite.select(['blue','green','red','nir','swir1','swir2']).multiply(10000).int16().clip(fB);
+  
+  //////////////////////////////////////////////////////////////////////////////////
+  // Calculate visual params using min and max of image
+  
+  // get dictionary of min values for each band
+  var viz_min = (composite.reduceRegion({
+    reducer: ee.Reducer.min(),
+    scale: 10, 
+    crs: crs,
+    bestEffort: true
+  }));
+  // get dictionary of max values for each band
+  var viz_max = (composite.reduceRegion({
+    reducer: ee.Reducer.max(),
+    scale: 10, 
+    crs: crs,
+    bestEffort: true
+  }));
+
+  var vizParams = {'min': 0.5, 'max': [viz_max.getNumber('red').getInfo(), viz_max.getNumber('green').getInfo(), viz_max.getNumber('blue').getInfo()],'bands': 'red,green,blue', 'gamma': 1.6};
+  //Display as True color composite
+  Map.addLayer(composite, vizParams, fullName);
+  
+  //////////////////////////////////////////////////////////////////////////////////
+  if(exportToDrive === 'yes'){
+    Export.image.toDrive(composite, fullName, "LandsatImageComposite", fullName, null, geometry.buffer(buffer_distance),30,crs,null,1e1 )
+  }
+  
+  // Print final composite
+  print ("Landsat Composite:", composite); 
+  return composite;
+  
+}
+
+//////////////////////////////////////////////////////////////////////////////////
+var composite = getComp(year,compositingPeriod,startJulian,endJulian, exportToDrive);
+//print(composite);
+Map.addLayer(ee.Image().paint(studyArea,1,1),{'palette':'000000,FF0000'}, roiName);
+
+
+
+//////////////////////////////////////////////////////////////////////////////////
+// EXPORTS //
+exports.getComp = getComp;

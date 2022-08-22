@@ -1,0 +1,92 @@
+// add_vegind - add_vnsir - add_dif
+
+// NDVI y NBR2
+
+function add_vegind(image) {
+ var ndvi = image.normalizedDifference(["NIR", "Red"]).rename("ndvi");
+ var nbr2 = image.normalizedDifference(["SWIR1","SWIR2" ]).rename("nbr2");
+return image.addBands(ndvi).addBands(ndwi);
+}
+
+// vnsir
+
+var add_vnsir = function(image) {
+  var vnsir = ee.Image(0).expression(
+    "1-((2*Red-Green-Blue)+3*(SWIR2-NIR))", {
+      "Red": image.select("Red"),
+      "Green": image.select("Green"),
+      "Blue": image.select("Blue"),
+      "SWIR2": image.select("SWIR2"),
+      "NIR": image.select("NIR")
+    });
+  return image.addBands(vnsir);
+};
+
+// B2_B1 y B3_B2
+
+var add_dif =  function(iamge){
+  var Red = image
+    .select("Red");
+    
+  var Green = image
+    .select("Green");
+    
+    var NIR = image
+    .select("NIR");
+    
+  var img_Red_Green = Red.subtract(Green)
+    .rename("B2_B1");
+    
+    var img_NIR_Red = NIR.subtract(Red)
+    .rename("B3_B2");
+    
+   return image.addBands(img_Red_Green).addBands(img_NIR_Red);
+};
+
+// Based on field analysis pixel should satisfy 3 conditions:
+// NDVI value between 0.6 to 0.7,
+// NDWI value between -0.5 to -0.58 and 
+// EVI value between 0.1 to 0.18. 
+// If the pixel is true for these conditions 
+// then only its a wheat pixel of my spp. of interest
+
+
+// EOS3 thresholds
+
+//NDVI value between 0 to 0.25 and
+//B2 - B1 greater than 0 and 
+//B3 - B2 greater than 0 and
+//NBR2 value between 0 to 0.075
+//vnsir lower than 0.9
+
+var maskedSoil = function(image) {
+  var ndvi = image.select(["ndvi"]);
+  var nbr2 = image.select(["nbr2"]);
+  var vnsir = image.select(["vnsir"]);
+  var B2_B1 = image.select(["B2_B1"]);
+  var B3_B2 = image.select(["B3_B2"]);
+  
+  // Definir mascaras basadas en los thresholds
+  
+  var mask_ndvi = ndvi.lte(0.25).and(ndvi.gte(0));
+  var mask_nbr2 = nbr2.lte(0.075).and(nbr2.gte(0));
+  var mask_vnsir = vnsir.lte(0.9);
+  var mask_B2_B1 = B2_B1.gte(0);
+  var mask_B3_B2 = B3_B2.gte(0);
+  
+  // Make a mask that fulfills the three masks and rename the band
+  var mask = mask_ndvi.and(mask_nbr2)
+  .and(mask_vnsir)
+  .and(mask_B2_B1)
+  .and(mask_B3_B2)
+  .rename("suelo");
+
+  // Add the mask as a band to the image and update the mask for the image
+  return image.addBands(mask)
+  .updateMask(mask);
+};
+
+var withIndices = filtered.map(addIndices).map(addEVI);
+
+var mask_indices = withIndices.map(maskedW21);
+

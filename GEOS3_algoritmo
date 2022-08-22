@@ -1,0 +1,568 @@
+// #TILES
+// # path 4 y row 69
+// # 3 69
+// # 4 70 
+// # 3 70 
+
+// FILTROS
+
+var colFilter = ee.Filter.and( 
+  ee.Filter.eq('WRS_PATH', 4), 
+  ee.Filter.eq('WRS_ROW', 69),
+    ee.Filter.lt('CLOUD_COVER', 30), // cobertura de nubes menor a 20%
+    ee.Filter.lt('GEOMETRIC_RMSE_MODEL', 10), // GEOMETRIC_RMSE_MODEL menor a 10 , validacion respecto a GCP
+    ee.Filter.or(
+        ee.Filter.eq('IMAGE_QUALITY', 9), // 9 = Best
+        ee.Filter.eq('IMAGE_QUALITY_OLI', 9)) // 9 = Best
+        ); 
+  
+
+// Scale y offset (se aplica para todas las imagenes de la coleccion 2)
+
+
+function applyScaleFactors(image) {
+  var opticalBands = image.select("SR_B.").multiply(0.0000275).add(-0.2); // solo bandas opticas;
+  return image.addBands(opticalBands, null, true); //adjuntar las bandas scaladas a la lista original
+}
+      
+// Renombrar las bandas de OLI (L8)
+
+function renameOli(img) {
+  return img.select(
+      ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "QA_PIXEL"],
+      ['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2', "QA_PIXEL"]);
+}
+
+// Renombrar las bandas del ETM+.(L4,5,7)
+
+function renameEtm(img) {
+  return img.select(
+      ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "QA_PIXEL"],
+      ['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2', "QA_PIXEL"]);
+}
+
+// RANGO VALIDO REFLECTANCIA
+
+// FUNCION PARA UTILLIZAR SOLOAMENTE VALORES VALIDOS DE REFLECTANCIA 0 A 1
+//las reflecatancais no estan en el rango 0 a 1, 
+// Rango valido de reflectancias es  7273 - 43636 LandSat coleccion 2 level 2 fuente: MANUAL TECNICO 
+// pero el rango min y maximo son 1 - 65455	
+// rango despues de applyScaleFactor ---->7.5e-06 - 0.99999
+//  los valores que no esten en ese rango deben ser NULL
+
+// funcion ----> si el valor del pixel i de la banda B es menor 0 y mayor a 1 ----> null
+
+// function filtro_reflec_valid(image){
+//     var s_reflectance = image.select(["Blue", "Green", "Red", "NIR", "SWIR1", "SWIR2"]) ;
+//     var reflec_mask = s_reflectance.lte(43636).and(s_reflectance.gte(7273)); // //  
+//     var  s_reflectance_masked = s_reflectance.addBands(reflec_mask).updateMask(reflec_mask);
+//     return  s_reflectance_masked;
+// }
+
+
+// addband(mask).updateMask
+
+// function filtro_reflec_valid(image) {
+//   var newImg = image
+//     .normalizedDifference(['B8', 'B4'])
+//     .rename('ndvi')
+//     .updateMask(
+//       image.select('QA60').not()
+//     )
+//     return newImg.updateMask(
+//       newImg.select('ndvi').gte(0)
+//     )
+// }
+
+// function filtro_reflec_valid(image) {
+//   var new_image = image.select(["Blue", "Green", "Red", "NIR", "SWIR1", "SWIR2"]) ;
+//   var Blue = new_image.select(["Blue"]);
+//   var Green = new_image.select(["Green"]);
+//   var Red = new_image.select(["Red"]);
+//   var NIR = new_image.select(["NIR"]);
+//   var SWIR1 = new_image.select(["SWIR1"]);
+//   var SWIR2 = new_image.select(["SWIR2"]);
+  
+//   // Definir mascaras basadas en los thresholds
+  
+//   var mask_ = Blue.lte(43636).and(Blue.gte(7273))
+//   .and(Green.lte(43636)).and(Green.gte(7273))
+//   .and(Red.lte(43636)).and(Red.gte(7273))
+//   .and(NIR.lte(43636)).and(NIR.gte(7273))
+//   .and(SWIR1.lte(43636)).and(SWIR1.gte(7273))
+//   .and(SWIR2.lte(43636)).and(SWIR2.gte(7273))
+//   .rename("mask_");
+  
+//   // var mask_green = Green.lte(7273).and(Green.gte(43636))
+//   // var mask_red = Red.lte(7273).and(Red.gte(43636))
+//   // var mask_NIR = NIR.lte(7273).and(NIR.gte(43636))
+//   // var mask_SWIR1 = SWIR1.lte(7273).and(SWIR1.gte(43636))
+//   // var mask_SWIR2 = SWIR2.lte(7273).and(SWIR2.gte(43636))
+  
+//   // Make a mask that fulfills all specific masks and rename the band
+  
+//   // var reflec_mask = mask_blue.and(mask_green)
+//   // .and(mask_red)
+//   // .and(mask_NIR)
+//   // .and(mask_SWIR1)
+//   // .and(mask_SWIR2)
+//   // .rename("reflec_mask");
+
+// // Añadir la mascara a cada imagen  y actualizar imagen basada en la mascara (masking)
+  
+//   // return new_image.addBands(mask_).updateMask(mask_);
+//   var new_image_mask = new_image.addBands(mask_, null, true);
+//   // return new_image_mask.updateMask(new_image_mask.select("mask_")).gt(0);
+//   // return new_image_mask.updateMask(new_image_mask.select("mask_")).eq(0);
+//   return new_image.updateMask(mask_);
+// }
+
+// ultimo intento jajajaj 
+
+
+// var filtro_reflec_valid = function(image) {
+//   var new_image = image.select(["Blue", "Green", "Red", "NIR", "SWIR1", "SWIR2"]) ;
+   
+//   var Blue = new_image.select(["Blue"]);
+//   var Green = new_image.select(["Green"]);
+//   var Red = new_image.select(["Red"]);
+//   var NIR = new_image.select(["NIR"]);
+//   var SWIR1 = new_image.select(["SWIR1"]);
+//   var SWIR2 = new_image.select(["SWIR2"]);
+   
+//   //thresholes : valores menores a 7273  y mayor a 43636  son invalidos  
+  
+//   var blue_mask = Blue.gte(7275).and(Blue.lte(43636));
+//   var green_mask = Green.gte(7275).and(Green.lte(43636));
+//   var red_mask = Red.gte(7275).and(Red.lte(43636));
+//   var nir_mask = NIR.gte(7275).and(NIR.lte(43636));
+//   var swir1_mask = SWIR1.gte(7275).and(SWIR1.lte(43636));
+//   var swir2_mask = SWIR2.gte(7275).and(SWIR2.lte(43636));
+   
+//   // mascara, valor pixel = 1 ---> cumple thresholes, pixel = 0 ---> no cumple thresholes
+  
+//   var mask_DN_validos = blue_mask.and(green_mask)
+//   .and(red_mask)
+//   .and(nir_mask)
+//   .and(swir1_mask)
+//   .and(swir2_mask)
+//   .rename("mask_DN_validos");
+  
+//   // var mask = new_image.select("mask_DN_validos").eq(1);
+  
+//   // return image.updateMask(mask_DN_validos.eq(1));
+  
+//     return image.addBands(mask_DN_validos)
+//   .updateMask(mask_DN_validos);
+// };
+
+// //   return image.updateMask(mask);
+// // };
+  
+ 
+ 
+
+// TRANSFORMACION ESPACIO ESPECTRAL ETM -> OLI
+// Coeficientes de Roy et al. (2016)
+
+var coefficients = {
+  itcps: ee.Image.constant([0.0003, 0.0088, 0.0061, 0.0412, 0.0254, 0.0172]),
+  slopes: ee.Image.constant([0.8474, 0.8483, 0.9047, 0.8462, 0.8937, 0.9071])
+};
+
+function etmToOli(img) {
+  return img.select(['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2'])
+      .multiply(coefficients.slopes)
+      .add(coefficients.itcps)
+      .addBands(img.select("QA_PIXEL"));
+}
+
+// MASCARA CON QA_PIXEL
+
+// L8 tiene diferentes valores de bit en el QA_PIXEL que L457?
+
+
+// ver documentacion para valores del QA_PIXEL
+// https://d9-wret.s3.us-west-2.amazonaws.com/assets/palladium/production/s3fs-public/media/files/LSDS-1619_Landsat8-C2-L2-ScienceProductGuide-v3.pdf
+
+function bitwiseExtract(value, fromBit, toBit) {
+  if (toBit === undefined) toBit = fromBit;
+  var maskSize = ee.Number(1).add(toBit).subtract(fromBit);
+  var mask = ee.Number(1).leftShift(maskSize).subtract(1);
+  return value.rightShift(fromBit).bitwiseAnd(mask);
+}
+
+function fmask(img) {
+  var qa = img.select("QA_PIXEL");
+  var cloudShadowBitMask = 1 << 4;
+  var dcloudsBitMask = 1 << 1;
+  var cirrusBitMask = 1 << 2;
+  var cloudsBitMask = 1 << 3;
+  var waterBitMask = 1 << 7;
+  var snowBitMask = 1 << 5;
+  var dilaBitMask = 0 << 6;
+  var cloudConBitMask = bitwiseExtract(qa, 8, 9); //Cloud Confidence
+  var cloudShadowConBitMask = bitwiseExtract(qa, 10, 11); //Cloud Shadow Confidence
+  var snowConBitMask = bitwiseExtract(qa, 12, 13); // Snow/Ice Confidence
+  var mask = qa.bitwiseAnd(cloudShadowBitMask)
+                 .eq(0)
+                 .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+                 .and(qa.bitwiseAnd(waterBitMask).eq(0))
+                 .and(qa.bitwiseAnd(snowBitMask).eq(0))
+                 .and(qa.bitwiseAnd(cirrusBitMask).eq(0))
+                 .and(qa.bitwiseAnd(dcloudsBitMask).eq(0))
+                 .and(qa.bitwiseAnd(dilaBitMask).eq(0));
+                // .and(qa.bitwiseAnd(cloudConBitMask).eq(3)) // si el Cloud Confidence es alto el valor del bit es 3
+                // .and(qa.bitwiseAnd(cloudShadowConBitMask).eq(3)) // si el Cloud Shadow Confidence es alto el valor del bit es 3
+                // .and(qa.bitwiseAnd(snowConBitMask).eq(3)); // si el Snow/Ice Confidencee es alto el valor del bit es 3
+  return img.updateMask(mask);
+}
+
+
+// FILTRO -> FACTOR_SCALA -> RENOMBRAR BANDAS -> TRANSFORMACION ESPACIO ESPECTRAL ETM a OLI -> 
+// EXTRACCION DE MASCARAS_QA ->(mascara valores de relfectancia validos) ->  INDICES ESPECTRALES -> MASCARA basada en indices espectrales
+
+// Pre OLI
+
+function prepOli(img) {
+  var orig = img;
+  img = applyScaleFactors(img);
+  img = renameOli(img);
+  // img = filtro_reflec_valid(img); //  filtra valores de pixel en el rango valido de reflectancia
+  return ee.Image(img.copyProperties(orig, orig.propertyNames()));
+}
+
+//  Pre ETM+ .
+
+function prepEtm(img) {
+  var orig = img;
+  img = applyScaleFactors(img);
+  img = renameEtm(img);
+  // img = filtro_reflec_valid(img); //  filtra valores de pixel en el rango valido de reflectancia
+  img = etmToOli(img);
+  return ee.Image(img.copyProperties(orig, orig.propertyNames()));
+}
+
+// RANGO VALIDO REFLECTANCIA
+
+// FUNCION PARA UTILLIZAR SOLOAMENTE VALORES VALIDOS DE REFLECTANCIA 0 A 1
+//las reflecatancais no estan en el rango 0 a 1, 
+// Rango valido de reflectancias es  7273 - 43636 LandSat coleccion 2 level 2 fuente: MANUAL TECNICO 
+// pero el rango min y maximo son 1 - 65455	
+// rango despues de applyScaleFactor ---->7.5e-06 - 0.99999
+//  los valores que no esten en ese rango deben hacer se NULL
+
+// funcion ----> si el valor del pixel i de la banda B es menor 0 y mayor a 1 ----> null
+
+
+var filtro_reflec_valid = function(image) {
+   var new_image = image.select(["Blue", "Green", "Red", "NIR", "SWIR1", "SWIR2"]) ;
+   
+   var Blue = new_image.select(["Blue"]);
+   var Green = new_image.select(["Green"]);
+   var Red = new_image.select(["Red"]);
+   var NIR = new_image.select(["NIR"]);
+   var SWIR1 = new_image.select(["SWIR1"]);
+   var SWIR2 = new_image.select(["SWIR2"]);
+   
+  //thresholes : valores menores a 0  y mayor a 1  son invalidos  
+  
+   var blue_mask = Blue.gte(0).and(Blue.lte(1));
+   var green_mask = Green.gte(0).and(Green.lte(1));
+   var red_mask = Red.gte(0).and(Red.lte(1));
+   var nir_mask = NIR.gte(0).and(NIR.lte(1));
+   var swir1_mask = SWIR1.gte(0).and(SWIR1.lte(1));
+   var swir2_mask = SWIR2.gte(0).and(SWIR2.lte(1));
+   
+  // mascara, valor pixel = 1 ---> cumple thresholes, pixel = 0 ---> no cumple thresholes
+  
+   var mask_DN_validos = blue_mask.and(green_mask)
+  .and(red_mask)
+  .and(nir_mask)
+  .and(swir1_mask)
+  .and(swir2_mask)
+  .rename("mask_DN_validos");
+  
+  // var mask = new_image.select("mask_DN_validos").eq(1);
+  
+  // return image.updateMask(mask_DN_validos.eq(1));
+  
+    return image.addBands(mask_DN_validos)
+  .updateMask((mask_DN_validos).eq(1));
+};
+
+//   return image.updateMask(mask);
+// };
+
+
+// NDVI y NBR2
+
+function add_vegind(image) {
+ var ndvi = image.normalizedDifference(["NIR", "Red"]).rename("ndvi");
+ var nbr2 = image.normalizedDifference(["SWIR1","SWIR2" ]).rename("nbr2");
+return image.addBands(ndvi).addBands(nbr2);
+}
+
+// vnsir
+
+var add_vnsir = function(image) {
+  var vnsir = ee.Image(0).expression(
+    "1-((2*Red-Green-Blue)+3*(SWIR2-NIR))", {
+      "Red": image.select("Red"),
+      "Green": image.select("Green"),
+      "Blue": image.select("Blue"),
+      "SWIR2": image.select("SWIR2"),
+      "NIR": image.select("NIR")
+    }).rename("vnsir");
+  return image.addBands(vnsir);
+};
+
+// B2_B1 y B3_B2
+
+var add_dif =  function(image){
+  var Red = image
+    .select("Red");
+    
+  var Green = image
+    .select("Green");
+    
+    var NIR = image
+    .select("NIR");
+    
+  var img_Red_Green = Red.subtract(Green)
+    .rename("B2_B1");
+    
+    var img_NIR_Red = NIR.subtract(Red)
+    .rename("B3_B2");
+    
+   return image.addBands(img_Red_Green).addBands(img_NIR_Red);
+};
+
+
+
+// EOS3 mask-thresholds
+
+// si el valor del pixel del raster suelo es 1(cumple con los requisitos) se conserva, 
+// si es cero (no cumple con los requisitos ) se elimina
+
+//EL RESULTADO ES UN GRUPO DE IMAGENES CON REFLECTANCIAS SOLO PARA LAS AREAS IDENTIFICADAS COMO SUELO
+//A DICHO GRUPO DE IMAGENES SE DENOMINA TESS (Temporal Syntetic Reflectance) 
+
+// DOS OPCIONES PARA LOS thresholds
+
+// publicacion 2017
+
+//NDVI value between 0 to 0.25 and
+//B2 - B1 greater than 0 and 
+//B3 - B2 greater than 0 and
+//NBR2 value between 0 to 0.075 
+// (DIFERENTES TRHESHOLES NBR2 0-0.025, 0-0.075, 0-0.150, 0-0.225, 0-0.300,0-0.350 )
+
+
+// publicacion nature 2021
+
+//NDVI value between -0.25 to 0.25 and
+//NBR2 value between -0.30 to 0.10
+//vnsir lower than 0.9
+
+//probar varias configuraciones y comprar con error kapha...
+
+var maskedSoil = function(image) {
+  var ndvi = image.select(["ndvi"]);
+  var nbr2 = image.select(["nbr2"]);
+  var vnsir = image.select(["vnsir"]);
+  var B2_B1 = image.select(["B2_B1"]);
+  var B3_B2 = image.select(["B3_B2"]);
+  
+  // Definir mascaras basadas en los thresholds
+  
+  var mask_ndvi = ndvi.lte(0.25).and(ndvi.gte(-0.25));
+  var mask_nbr2 = nbr2.lte(0.10).and(nbr2.gte(-0.30));
+  var mask_vnsir = vnsir.lte(0.9);
+  var mask_B2_B1 = B2_B1.gte(0);
+  var mask_B3_B2 = B3_B2.gte(0);
+  
+  // Make a mask that fulfills the three masks and rename the band
+  
+  var soil_mask = mask_ndvi.and(mask_nbr2)
+  .and(mask_vnsir)
+  .and(mask_B2_B1)
+  .and(mask_B3_B2)
+  .rename("soil_mask");
+
+// Añadir la mascara a cada imagen  y actualizar imagen basada en la mascara (masking)
+  
+  return image.addBands(soil_mask)
+  .updateMask(soil_mask);
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
+// DATA
+
+var DN_L4 = ee.ImageCollection("LANDSAT/LT04/C02/T1_L2");
+var DN_L5 = ee.ImageCollection("LANDSAT/LT05/C02/T1_L2");
+var DN_L7 = ee.ImageCollection("LANDSAT/LE07/C02/T1_L2");
+var DN_L8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2");
+
+// procesamiento completo hasta tener pixels de suelo para cada imagen de la coleccion
+// la coleccion completa se denomina TESS (Temporal Syntetic Reflectance)
+
+var sr_L4 = DN_L4.filter(colFilter).map(fmask).map(prepEtm).map(filtro_reflec_valid).map(add_vegind).map(add_vnsir).map(add_dif).map(maskedSoil);
+var sr_L5 = DN_L5.filter(colFilter).map(fmask).map(prepEtm).map(filtro_reflec_valid).map(add_vegind).map(add_vnsir).map(add_dif).map(maskedSoil);
+var sr_L7 = DN_L7.filter(colFilter).map(fmask).map(prepEtm).map(filtro_reflec_valid).map(add_vegind).map(add_vnsir).map(add_dif).map(maskedSoil);
+var sr_L8 = DN_L8.filter(colFilter).map(fmask).map(prepOli).map(filtro_reflec_valid).map(add_vegind).map(add_vnsir).map(add_dif).map(maskedSoil); 
+
+
+
+// var tess_01_reflec_mask = ee.Image(sr_L8.first().select("reflec_mask")); //  mascara reflectancia  imagen del TESS
+// print(tess_01_reflec_mask, "tess_01_reflec_mask");  // 
+// var _Viz = {min: 0, max: 1, palette: ['00FFFF', '0000FF']};
+// Map.addLayer(tess_01_reflec_mask, _Viz, "tess_01_mask_refle", false);
+
+////////////////////////////////////////////////////////////////////////////////
+
+
+//TESS
+
+// Unir las coleccion L4-5-7-8 
+
+var tess = sr_L4.merge(sr_L5).merge(sr_L7).merge(sr_L8); // 
+
+// PRINT TESS
+
+print("TESS (L4+L5+L7+L8)", tess);  // propiedades del TESS
+
+// TESS stack para exportar
+var tess_stack = tess.select(["Blue" , "Green", "Red", "NIR", "SWIR1", "SWIR2", "mask_DN_validos", "soil_mask", "ndvi"]);
+
+// homogeneizar el tipo de dato de cada banda como float
+
+var tess_stack = tess_stack.map(function(img){
+var bandas = img.select(["Blue" , "Green", "Red", "NIR", "SWIR1", "SWIR2", "mask_DN_validos", "soil_mask", "ndvi"]);
+return img.addBands(bandas, null,  true).toFloat();
+});
+ 
+////////////////////////////////////////////////////////////////////////////////
+
+// SYSI
+
+// Solo necesitamos las bandas 'Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2'
+
+var tess_sysi = tess.select(["Blue" , "Green", "Red", "NIR", "SWIR1", "SWIR2"]);
+
+// homogeneizar el tipo de dato de cada banda como float
+
+var tess_sysi = tess_sysi.map(function(img){
+var bandas = img.select(["Blue", "Green", "Red", "NIR", "SWIR1", "SWIR2"]);
+return img.addBands(bandas, null,  true).toFloat();
+});
+
+
+// Agregar pixeles de suelo mediante la mediana -> reducer = mediana
+// asi se aggregara la data en el tiempo -> el resultado es una sola imagen = SYSI 
+
+var sysi = tess_sysi.median();
+print("SYSI",sysi); // propiedades del SYSI
+
+// // PLOT RGB DEL  SYSI 
+
+var vis_sysi = {
+  bands: ["Red", "Green", "Blue"],
+  min: -0.2,
+  max: 1.6,
+};
+
+Map.setCenter(-71, -13);
+// Map.addLayer(imagen_test , visualization, "TESS-01 RGB "); // TESS-01 RGB color real
+Map.addLayer(sysi , vis_sysi, "SYSI RGB ");  // SYSI RGB color real
+
+////////////////////////////////////////////////////////////////////////////////
+
+// EXPORTAR SYSI 
+
+var region_export = ee.Geometry.BBox(-72.10,-13.75,-71.70, -13.40);
+// w s e n 
+
+Export.image.toDrive({
+  image: sysi,
+  description: "sysi",
+  folder: "GEE_exports",
+  region: region_export,
+  scale: 30,
+  crs: "EPSG:4326"
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+// OBSERVACIONES
+
+// NO HAY REGISTROS DE LANDSAT 4 (esto  tambien paso en el paper de...)
+// EL RANGO DE SR  es max: 1.3580148725 min: -0.16918000000000002
+// Es necesario solo considerar el rango valido (0-1) para la reflectancia ( comprobar con una serie detiempo de ndvi o reflectancai)
+// 
+// Se detecta zonas urbanas como suelo (calibrar mejor los thresholes)
+
+// COMPROBACIONES/ analisis (en R)
+// composicion espectral de pixeles de suelo y
+// la linea del suelo red vs NIR reflectance regresion
+//  matriz de confusion con datos datos wtiquetados de areas urbanas
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+// EXPORTAR tess_01
+
+
+var tess_stack_01 = ee.Image(tess_stack.first());
+print("tess_01",tess_stack_01); // propiedades tess_01
+
+var region_export = ee.Geometry.BBox(-72.10,-13.75,-71.70, -13.40);
+// w s e n 
+
+Export.image.toDrive({
+  image: tess_stack_01,
+  description: "tess_stack_01",
+  folder: "GEE_exports",
+  region: region_export,
+  scale: 30,
+  crs: "EPSG:4326"
+});
+
+
+
+//////////////////////////////////////////////////////////////////////////////// 
+
+// SERIES DE TIEMPO
+
+// var punto_muestreo = ee.Geometry.Point([-72.15088845888876, -13.737191773062705]);
+
+// var chart =
+//     ui.Chart.image
+//         .seriesByRegion({
+//           imageCollection: tess_stack,
+//           band: "ndvi",
+//           regions: punto_muestreo,
+//           reducer: ee.Reducer.mean(),
+//           scale: 500,
+//           seriesProperty: 'label',
+//           xProperty: 'system:time_start'
+//         })
+//         .setOptions({
+//           title: 'Average NDVI Value by Date',
+//           hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
+//           vAxis: {
+//             title: 'NDVI (x1e4)',
+//             titleTextStyle: {italic: false, bold: true}
+//           },
+//           lineWidth: 5,
+//           colors: ['f0af07', '0f8755', '76b349'],
+//         });
+// print(chart);
+
+
+
+
+

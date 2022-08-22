@@ -1,0 +1,179 @@
+// #TILES
+// # path 4 y row 69
+// # 3 69
+// # 4 70 
+// # 3 70 
+
+// FILTROS
+
+var colFilter = ee.Filter.and( 
+  ee.Filter.eq('WRS_PATH', 4), 
+  ee.Filter.eq('WRS_ROW', 69),
+    ee.Filter.lt('CLOUD_COVER', 30), // cobertura de nubes menor a 20%
+    ee.Filter.lt('GEOMETRIC_RMSE_MODEL', 10), // GEOMETRIC_RMSE_MODEL menor a 10 , validacion respecto a GCP
+    ee.Filter.or(
+        ee.Filter.eq('IMAGE_QUALITY', 9), // 9 = Best
+        ee.Filter.eq('IMAGE_QUALITY_OLI', 9)) // 9 = Best
+        ); 
+  
+// Rango valido de reflectancias es  7273 - 43636 LandSat coleccion 2 level 2 
+
+
+
+// Scale y offset (se aplica para todas las imagenes de la coleccion 2)
+
+function applyScaleFactors(image) {
+  var opticalBands = image.select("SR_B.").multiply(0.0000275).add(-0.2); // solo bandas opticas;
+  return image.addBands(opticalBands, null, true); //adjuntar las bandas scaladas a la lista original
+}
+      
+
+// Renombrar las bandas de OLI (L8)
+
+function renameOli(img) {
+  return img.select(
+      ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "QA_PIXEL"],
+      ['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2', "QA_PIXEL"]);
+}
+
+// Renombrar las bandas del ETM+.(L4,5,7)
+
+function renameEtm(img) {
+  return img.select(
+      ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "QA_PIXEL"],
+      ['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2', "QA_PIXEL"]);
+}
+
+// TRANSFORMACION ESPACIO ESPECTRAL ETM -> OLI
+// Coeficientes de Roy et al. (2016)
+
+var coefficients = {
+  itcps: ee.Image.constant([0.0003, 0.0088, 0.0061, 0.0412, 0.0254, 0.0172]),
+  slopes: ee.Image.constant([0.8474, 0.8483, 0.9047, 0.8462, 0.8937, 0.9071])
+};
+
+function etmToOli(img) {
+  return img.select(['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2'])
+      .multiply(coefficients.slopes)
+      .add(coefficients.itcps)
+      .addBands(img.select("QA_PIXEL"));
+}
+
+// MASCARA CON QA_PIXEL
+
+// L8 tiene diferentes valores de bit en el QA_PIXEL que L457?
+
+
+// ver documentacion para valores del QA_PIXEL
+// https://d9-wret.s3.us-west-2.amazonaws.com/assets/palladium/production/s3fs-public/media/files/LSDS-1619_Landsat8-C2-L2-ScienceProductGuide-v3.pdf
+
+function bitwiseExtract(value, fromBit, toBit) {
+  if (toBit === undefined) toBit = fromBit;
+  var maskSize = ee.Number(1).add(toBit).subtract(fromBit);
+  var mask = ee.Number(1).leftShift(maskSize).subtract(1);
+  return value.rightShift(fromBit).bitwiseAnd(mask);
+}
+
+function fmask(img) {
+  var qa = img.select("QA_PIXEL");
+  var cloudShadowBitMask = 1 << 4;
+  var dcloudsBitMask = 1 << 1;
+  var cirrusBitMask = 1 << 2;
+  var cloudsBitMask = 1 << 3;
+  var waterBitMask = 1 << 7;
+  var snowBitMask = 1 << 5;
+  var dilaBitMask = 0 << 6;
+  var cloudConBitMask = bitwiseExtract(qa, 8, 9); //Cloud Confidence
+  var cloudShadowConBitMask = bitwiseExtract(qa, 10, 11); //Cloud Shadow Confidence
+  var snowConBitMask = bitwiseExtract(qa, 12, 13); // Snow/Ice Confidence
+  var mask = qa.bitwiseAnd(cloudShadowBitMask)
+                 .eq(0)
+                 .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+                 .and(qa.bitwiseAnd(waterBitMask).eq(0))
+                 .and(qa.bitwiseAnd(snowBitMask).eq(0))
+                 .and(qa.bitwiseAnd(cirrusBitMask).eq(0))
+                 .and(qa.bitwiseAnd(dcloudsBitMask).eq(0))
+                 .and(qa.bitwiseAnd(dilaBitMask).eq(0));
+                // .and(qa.bitwiseAnd(cloudConBitMask).eq(3)) // si el Cloud Confidence es alto el valor del bit es 3
+                // .and(qa.bitwiseAnd(cloudShadowConBitMask).eq(3)) // si el Cloud Shadow Confidence es alto el valor del bit es 3
+                // .and(qa.bitwiseAnd(snowConBitMask).eq(3)); // si el Snow/Ice Confidencee es alto el valor del bit es 3
+  return img.updateMask(mask);
+}
+
+
+// FILTRO -> FACTOR_SCALA -> RENOMBRAR BANDAS -> TRANSFORMACION ESPACIO ESPECTRAL ETM a OLI -> 
+// EXTRACCION DE MASCARAS_QA ->(mascara valores de relfectancia validos) ->  INDICES ESPECTRALES -> MASCARA basada en indices espectrales
+
+// Pre OLI
+
+function prepOli(img) {
+  var orig = img;
+  img = applyScaleFactors(img);
+  img = renameOli(img);
+  return ee.Image(img.copyProperties(orig, orig.propertyNames()));
+}
+
+//  Pre ETM+ .
+
+function prepEtm(img) {
+  var orig = img;
+  img = applyScaleFactors(img);
+  img = renameEtm(img);
+  img = etmToOli(img);
+  return ee.Image(img.copyProperties(orig, orig.propertyNames()));
+}
+
+
+
+// DATA
+
+var DN_L4 = ee.ImageCollection("LANDSAT/LT04/C02/T1_L2");
+var DN_L5 = ee.ImageCollection("LANDSAT/LT05/C02/T1_L2");
+var DN_L7 = ee.ImageCollection("LANDSAT/LE07/C02/T1_L2");
+var DN_L8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2");
+
+// procesamiento completo hasta tener pixels de suelo para cada imagen de la coleccion
+// la coleccion completa se denomina TESS (Temporal Syntetic Reflectance)
+
+var sr_L4 = DN_L4.filter(colFilter).map(fmask).map(prepEtm);
+var sr_L5 = DN_L5.filter(colFilter).map(fmask).map(prepEtm);
+var sr_L7 = DN_L7.filter(colFilter).map(fmask).map(prepEtm);
+var sr_L8 = DN_L8.filter(colFilter).map(fmask).map(prepOli); 
+
+
+// Unir las coleccion L4-5-7-8 
+
+var tess = sr_L4.merge(sr_L5).merge(sr_L7).merge(sr_L8); // 
+
+// Solo necesitamos las bandas 'Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2'
+
+var reflec_soil_pixs = tess.select(['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2']);
+
+// homogeneizar el tipo de dato de cada banda como float
+
+var coleccion_filtrada = reflec_soil_pixs.map(function(img){
+ var bandas = img.select(["Blue", "Green", "Red", "NIR", "SWIR1", "SWIR2"]);
+ return img.addBands(bandas, null,  true); //  .toFloat()
+});
+
+// IMAGEN DE PRUEBA
+var imagen_test = ee.Image(coleccion_filtrada.first().select(["Blue"])); // banda azul primer imagen de la colecccion completa
+print(imagen_test, "banda_azul_primera_imagen");
+print(coleccion_filtrada, "coleccion_landsat");
+
+// var _Viz = {min: -0.16, max: 1.35, palette: ['00FFFF', '0000FF']};
+// Map.addLayer(imagen_test, _Viz, 'banda_azul_primera_imagen', false);
+
+// DESCARGAR COLECCION
+
+var batch = require("users/fitoprincipe/geetools:batch");
+var region_export = ee.Geometry.BBox(-72.10,-13.75,-71.70, -13.40);
+
+batch.Download.ImageCollection.toDrive(coleccion_filtrada, "landsat_col", {
+  name : "landsat_col_{system:index}",
+  scale: 30,
+  region: region_export
+});
+
+
+
